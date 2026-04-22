@@ -2,11 +2,13 @@ d# Silicon Valley Trail — Code Review
 
 A review of your take-home: bugs found, how to fix them, code-quality suggestions, and interview questions (with answers) you should expect.
 
-Read this top-to-bottom. The **Critical Bugs** section alone will stop your app from running — fix those first.
+Read this top-to-bottom.
+
+> **Correction from an earlier draft:** the app **does run** — I was wrong to label §1 as "critical." The path bugs below are **silent landmines**, not showstoppers. Fix them before the interview anyway, because a reviewer WILL notice, and one of them is polluting your `~/Desktop/`.
 
 ---
 
-## 1. Critical Bugs (your app is broken without fixing these)
+## 1. Silent Path Bugs (app runs, but does the wrong thing behind your back)
 
 ### Bug 1 — Wrong `parent` count on every path resolution
 
@@ -29,7 +31,7 @@ load_dotenv(_ROOT / ".env")
 
 _CLIENT_DIR = Path(__file__).resolve().parent.parent / "client"   # ← same bug
 ```
-Result: `_CLIENT_DIR` points to `/Users/user/Desktop/client`, which doesn't exist. Flask can't serve `index.html`, so `GET /` 404s.
+Result: `_CLIENT_DIR` points to `/Users/user/Desktop/client`, which doesn't exist. Flask accepts any path string for `static_folder` without validating, so the app **starts fine** — but if anyone hits `GET /`, it 500s (tries to serve `index.html` from a non-existent dir). You probably haven't noticed because you've been testing `/api/games/*` directly. Also: `load_dotenv(_ROOT / ".env")` silently no-ops when the file isn't found, so any env vars you *think* are loading from a project `.env` aren't.
 
 **Fix — `app.py`:**
 ```python
@@ -54,7 +56,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent   # ← one .parent too many
 _GAMES_DIR = _PROJECT_ROOT / "games"
 ```
-Result: saves get written to `/Users/user/Desktop/games/` (and auto-create that dir on your Desktop!). Load will also look there and find nothing.
+Result: the first time you hit `PUT /api/games/{id}/saves`, `_GAMES_DIR.mkdir(parents=True, exist_ok=True)` silently creates `/Users/user/Desktop/games/` and drops save files there. Since the server also *reads* from that same wrong path, in-process save/load actually works — which is why you didn't notice. **But**: (1) check your Desktop after you've played one full session with a save, you'll see a stray `games/` folder there; (2) a reviewer running your code will get the same pollution on their machine — that's an instant red flag; (3) if you move the project folder, your saves stay on the old Desktop.
 
 **Fix:**
 ```python
@@ -73,7 +75,7 @@ _GAMES_DIR = _PROJECT_ROOT / "games"
 
 ### Bug 2 — `index.html` / `client/` directory doesn't exist
 
-Even after fixing the path, `/Users/user/Desktop/SiliconValley_Trail/client/` doesn't exist and there's no `index.html`. `app.py:24` will return 500 on `GET /`.
+Even after fixing the path, `/Users/user/Desktop/SiliconValley_Trail/client/` doesn't exist and there's no `index.html`. `GET /` → 500 as soon as anyone actually visits it. Again, this is why the app "runs" but isn't really complete — the root route is broken.
 
 **Fix options:**
 1. If the take-home expects you to include a frontend, create `client/index.html` (even a stub is better than nothing).
@@ -410,8 +412,8 @@ Below are questions **a reviewer will likely ask** about *this specific codebase
 
 ## 6. Suggested Fix Order (if you have limited time)
 
-1. **§1 Bugs 1a, 1b, 1c** (paths) — 10 minutes, unblocks everything.
-2. **§1 Bug 2** (missing `index.html`) — stub it or remove the route.
+1. **§1 Bugs 1a, 1b, 1c** (paths) — 10 minutes. These are silent right now but any reviewer running your code will see the rogue `~/Desktop/games/` folder and it's an instant credibility hit.
+2. **§1 Bug 2** (missing `index.html`) — stub it or switch `/` to return JSON.
 3. **§1 Bug 3** (`KeyError` in offline mode).
 4. **§3.12** (`debug=True` env-gated).
 5. Add `requirements.txt` + `README.md` + `.gitignore` — 15 minutes, massive polish signal.
@@ -419,14 +421,14 @@ Below are questions **a reviewer will likely ask** about *this specific codebase
 7. Write **one** unit test per pure module (`resources`, `conditions`, `weather._wmo_code_to_condition`).
 8. **§3.3** Inject `Random` into `loop.resolve_turn` and a couple of event choice functions.
 
-The first three are the difference between "it doesn't run" and "it runs." Everything else is polish.
+The app runs. These fixes turn "it runs for me on my machine, for now" into "it runs anywhere, and I can explain it."
 
 ---
 
 ## 7. Reminder: what reviewers actually grade on
 
 For a junior-role take-home, the rubric is usually:
-1. **Does it run?** (§1 bugs are fatal here.)
+1. **Does it run?** (§1 bugs are silent landmines — app starts but misbehaves.)
 2. **Is the code readable?** (Naming, module organization, comments that explain *why*, not *what*.)
 3. **Does the candidate understand the tradeoffs they made?** (That's what §5 prepares you for.)
 4. **Is there any testing?** (One test file > zero test files.)
@@ -435,3 +437,268 @@ For a junior-role take-home, the rubric is usually:
 You don't need to be perfect. You need to **be able to explain what you'd fix next and why**, and show that you *noticed* the sharp edges. That's what separates a junior who'll grow from one who'll plateau.
 
 Good luck in the interview.
+
+---
+
+## 8. Copy-Paste Prompts (one per bug)
+
+Each prompt below is **self-contained** — you can paste it into a fresh AI conversation (Claude, ChatGPT, Cursor, etc.) and it will have the full context it needs to make the fix. The **Why** line above each prompt is for *you* — so you understand what the AI is fixing and can answer if the interviewer asks about it.
+
+---
+
+### Prompt for Bug 1a — `app.py` parent count
+
+**Why:** `app.py` lives at the project root, so `Path(__file__).resolve().parent` is already the project root. Chaining `.parent.parent` walks up into `~/Desktop/`, pointing `_CLIENT_DIR` at a non-existent folder and making `load_dotenv` silently do nothing.
+
+```
+I have a Flask app at /Users/user/Desktop/SiliconValley_Trail/app.py. The project layout is flat — app.py is at the project root (no src/ folder). The current code in app.py uses `Path(__file__).resolve().parent.parent` to compute the project root, which is wrong by one level: it resolves to ~/Desktop instead of the project root. This means _CLIENT_DIR points to a non-existent path and load_dotenv never finds the .env.
+
+Fix app.py so that _ROOT and _CLIENT_DIR both resolve to the actual project root (/Users/user/Desktop/SiliconValley_Trail). Use Path(__file__).resolve().parent (just one .parent). Don't change any other logic. Show me the corrected file.
+```
+
+---
+
+### Prompt for Bug 1b — `api/weather.py` parent count
+
+**Why:** same class of bug, one directory deeper. `api/weather.py` needs `.parent.parent` to reach the project root, not `.parent.parent.parent`.
+
+```
+I have api/weather.py at /Users/user/Desktop/SiliconValley_Trail/api/weather.py. The project layout is flat — the project root is /Users/user/Desktop/SiliconValley_Trail and there is no src/ directory. The current code uses `Path(__file__).resolve().parent.parent.parent` to compute _PROJECT_ROOT, which is wrong by one level — it resolves to ~/Desktop instead of the project root.
+
+Change _PROJECT_ROOT to use `.parent.parent` (one fewer .parent). Don't modify any other code in the file. Show me the diff.
+```
+
+---
+
+### Prompt for Bug 1c — `routes/game.py` parent count
+
+**Why:** same bug. Worse here because it's used to create a `games/` directory for save files — `.mkdir(parents=True, exist_ok=True)` silently creates `~/Desktop/games/` on first save and drops save files there.
+
+```
+I have routes/game.py at /Users/user/Desktop/SiliconValley_Trail/routes/game.py. The project root is /Users/user/Desktop/SiliconValley_Trail (flat layout, no src/). The current code uses `Path(__file__).resolve().parent.parent.parent` for _PROJECT_ROOT, which resolves one level too high (~/Desktop) — so _GAMES_DIR points to ~/Desktop/games instead of <project_root>/games. The save endpoint calls _GAMES_DIR.mkdir(parents=True, exist_ok=True), which silently creates that directory on my Desktop.
+
+Change _PROJECT_ROOT to use `.parent.parent` (drop one .parent) so _GAMES_DIR lands inside the project root. Don't modify any other code. Show me the diff and confirm the new save path.
+```
+
+---
+
+### Prompt for Bug 2 — missing `client/index.html`
+
+**Why:** the `GET /` route calls `send_from_directory(app.static_folder, "index.html")`. There is no `client/` dir and no `index.html`, so anyone who hits `/` gets a 500. If this is a backend-only take-home, the root route shouldn't pretend to serve HTML.
+
+```
+I have a Flask app at /Users/user/Desktop/SiliconValley_Trail/app.py. It currently has:
+
+    @app.get("/")
+    def index():
+        return send_from_directory(app.static_folder, "index.html")
+
+There is no client/ directory and no index.html — this is a backend-only take-home. When anyone hits GET /, Flask returns a 500.
+
+Replace the index route with a simple JSON response that describes the service and points to the API prefix (/api/games). Keep CORS and the blueprint registration as-is. Show me the updated app.py.
+```
+
+---
+
+### Prompt for Bug 3 — `KeyError` in weather offline mode
+
+**Why:** `fetch_weather` has two code paths that use `WEATHER_FALLBACK[city]` (direct subscript). If `city` isn't in the fallback dict, it raises `KeyError`. The online branch correctly uses `.get(...)` with a default, but the offline branch and the `except Exception` branch don't.
+
+```
+I have api/weather.py at /Users/user/Desktop/SiliconValley_Trail/api/weather.py. The fetch_weather(city) function has two spots that crash with KeyError when an unknown city is passed:
+
+1. In the WEATHER_OFFLINE env-var branch near the top:
+     return dict(WEATHER_FALLBACK[city])
+2. In the `except Exception:` block at the end of the try/except:
+     return dict(WEATHER_FALLBACK[city])
+
+A few lines above, there is a correct pattern:
+     return dict(WEATHER_FALLBACK.get(city, WEATHER_FALLBACK["San Jose"]))
+
+Update both of the unsafe subscripts to use the same .get(city, WEATHER_FALLBACK["San Jose"]) pattern so an unknown city name falls back to San Jose instead of crashing. Don't change other logic. Show the diff.
+```
+
+---
+
+### Prompt for Bug 4 — thread safety on `_games` dict
+
+**Why:** Flask's dev server is threaded. `get_game` / `put_game` in `game/state.py` read/write a module-level dict with no lock. Two concurrent requests for the same `game_id` can interleave and corrupt state.
+
+```
+I have game/state.py at /Users/user/Desktop/SiliconValley_Trail/game/state.py. It holds games in memory with:
+
+    _games: Dict[str, Dict[str, Any]] = {}
+
+    def get_game(game_id): return _games.get(game_id)
+    def put_game(state): _games[state["game_id"]] = state
+
+Flask's dev server is threaded by default, so two concurrent requests on the same game_id can race. Add a module-level threading.Lock() and wrap both get_game and put_game in `with _games_lock:`. Keep the public signatures the same. Add a short comment explaining that this guards dict access only, not turn-resolution logic. Show me the updated file.
+```
+
+---
+
+### Prompt for Bug 5 — wrong HTTP status codes
+
+**Why:** `400 Bad Request` means "the client sent something malformed." Using 400 for "save file doesn't exist" or "save name already taken" is semantically wrong. Missing resources should be `404`; conflicts should be `409`.
+
+```
+I have routes/game.py at /Users/user/Desktop/SiliconValley_Trail/routes/game.py. Several endpoints return HTTP 400 for conditions that are not bad requests:
+
+- load_game (POST /<game_id>/loads): returns 400 when the save file doesn't exist. Should be 404.
+- restore_save (POST /restore-save): returns 400 when no save is found for the given name. Should be 404.
+- save_game (PUT /<game_id>/saves): returns 400 when the save name is already taken by a different game. This is a conflict, so it should be 409.
+
+Keep 400 for genuinely bad input (empty name, invalid slug). Update only the status codes for the three cases above, leaving the error messages as-is. Show me the diff.
+```
+
+---
+
+### Prompt for Bug 6 — `day` counter not incremented on a losing turn
+
+**Why:** in `loop.resolve_turn`, the win branch advances `state["day"]` before returning, but the lose branch doesn't. That makes "you lost on day 12" and "you won on day 13" reflect different counting rules for the same last turn.
+
+```
+I have game/loop.py at /Users/user/Desktop/SiliconValley_Trail/game/loop.py. The resolve_turn function has both a win check and a lose check near the end. The win branch advances state["day"] by 1 before returning. The lose branch does not. This causes off-by-one display inconsistency between wins and losses on the same turn.
+
+Make the lose branch increment state["day"] the same way the win branch does, so both paths advance the calendar consistently. There is a similar pair of checks in resolve_event_turn — apply the same fix there too. Don't change other logic. Show me the diffs.
+```
+
+---
+
+### Prompt for Bug 7 — dead `if ev:` branch
+
+**Why:** `pick_event` always returns a dict (it falls back to San Jose's pool if the city isn't in `LOCATION_EVENTS`). So the `if ev:` check in `loop.resolve_turn` is dead code. Either make events actually optional, or delete the dead branch.
+
+```
+I have game/events.py and game/loop.py at /Users/user/Desktop/SiliconValley_Trail/game/. The pick_event(location_name, weather) function in events.py always returns a non-empty dict — it falls back to LOCATION_EVENTS["San Jose"] if the city is missing. In game/loop.py, resolve_turn does:
+
+    ev = state["current_event"]
+    arrival = f"You arrive in {loc}."
+    if ev:
+        arrival += f" {ev.get('title', 'Something')} demands a decision."
+
+That `if ev:` check is always True, so it's dead code. Remove the `if ev:` branch and collapse the code so the "demands a decision" line is always appended. Don't change pick_event itself. Show me the diff.
+```
+
+---
+
+### Prompt for §3.3 — inject RNG for testability
+
+**Why:** the game uses `random.random()` and `random.choice()` directly in `loop.py`, `actions.py`, and `events.py`. That makes every randomized outcome untestable. Injecting a `random.Random` instance lets you seed it for reproducible tests.
+
+```
+I have a small Python game at /Users/user/Desktop/SiliconValley_Trail with these files using the `random` module directly:
+
+- game/loop.py (resolve_event_turn: rolls for bonus minigame, picks minigame type)
+- game/actions.py (action_pitch_vc: rolls for pitch success)
+- game/events.py (pick_event: rolls for weather event; _apply_choice_outcome: rolls risk_chance)
+
+Refactor so each of these functions accepts an optional `rng: random.Random = random` parameter and uses rng.random() / rng.choice() instead of calling the random module directly. The default value `random` lets existing callers work unchanged (since the `random` module exposes random() and choice() at the module level with matching signatures). Update the function signatures and call sites within the game package to pass an rng through when they call each other. Don't change the public HTTP route signatures in routes/game.py. Show me a short summary of every file you changed plus the full diff.
+```
+
+---
+
+### Prompt for §3.12 — gate `debug=True` behind an env var
+
+**Why:** Flask's debug mode enables the Werkzeug debugger, which is a remote-code-execution vector if the port is ever exposed. Hardcoding `debug=True` in the entry point means whoever runs the code ships that risk.
+
+```
+I have a Flask entry point at /Users/user/Desktop/SiliconValley_Trail/app.py. The last block is:
+
+    if __name__ == "__main__":
+        app.run(debug=True, port=5000)
+
+Hardcoding debug=True is an RCE risk if the server is ever exposed. Replace it with an env-var check so debug defaults to OFF and only turns on when FLASK_DEBUG=1 is set. Import os if it's not already imported. Also let the port be overridden via the PORT env var (default 5000). Show me the updated block.
+```
+
+---
+
+### Prompt for §3.10 — validate `success` type on minigame endpoints
+
+**Why:** the three minigame endpoints do `bool(data["success"])`. `bool("no")` is `True` in Python (non-empty string). So a client sending `{"success": "no"}` gets credited with a success. You want strict boolean validation.
+
+```
+I have routes/game.py at /Users/user/Desktop/SiliconValley_Trail/routes/game.py. Three endpoints handle minigame results:
+
+- mining_minigame
+- typing_minigame
+- coffee_hunt_minigame
+
+Each does:
+
+    data = request.get_json(silent=True) or {}
+    if "success" not in data:
+        return jsonify({"error": "success boolean required"}), 400
+    st, outcome = game_minigames.apply_*_result(st, bool(data["success"]))
+
+The bool() coercion is too loose — bool("no") is True. Replace the check with strict type validation: reject the request with 400 if data["success"] is not a boolean. Factor the check into a small helper at the top of the file if it keeps things clean. Don't change the minigame logic itself. Show me the diff.
+```
+
+---
+
+### Prompt for §3.2 — remove redundant inline clamping in action handlers
+
+**Why:** `game/actions.py` manually caps morale and hype with `min(100, ...)` and then ALSO calls `resources.clamp_resources(state)`. Two sources of truth for the clamp rule is how drift happens — if the cap ever changes to 120, you'd have to update both places.
+
+```
+I have game/actions.py at /Users/user/Desktop/SiliconValley_Trail/game/actions.py. Several action handlers manually clamp resources inline AND then call resources.clamp_resources(state). For example in action_rest:
+
+    r["morale"] = min(100, r["morale"] + 20)
+    r["coffee"] -= 8
+    r["bugs"] += 2
+    resources.clamp_resources(state)
+
+The clamp_resources call already handles the morale cap. Remove the inline min()/max() clamps in every action handler and let clamp_resources be the single source of truth. The clamp_resources function lives in game/resources.py — check it to confirm which keys it clamps and don't remove any inline clamp for a key clamp_resources doesn't handle. Show me the diff and a one-line note about anything you kept.
+```
+
+---
+
+### Prompt for §3.4 — extract magic numbers to named constants
+
+**Why:** `pick_event` has `0.42 / 0.24` for weather-event probability; `resolve_event_turn` has `0.55` for bonus minigame chance. Naming them makes the code self-documenting and puts tuning knobs in one place.
+
+```
+I have magic-number probabilities scattered in two files at /Users/user/Desktop/SiliconValley_Trail/game/:
+
+- events.py, pick_event(): `p_weather = 0.42 if bucket in ("rain", "fog", "clouds") else 0.24`
+- loop.py, resolve_event_turn(): `BONUS_MINIGAME_CHANCE = 0.55` (defined inside the function)
+
+Lift each of these to module-level named constants at the top of their respective files:
+- events.py: WEATHER_EVENT_CHANCE_ROUGH = 0.42 and WEATHER_EVENT_CHANCE_CLEAR = 0.24
+- loop.py: BONUS_MINIGAME_CHANCE = 0.55 at module scope (not inside the function)
+
+Update the call sites to use the constants. Don't change the numeric values. Show me the diff.
+```
+
+---
+
+### Prompt for quick-wins — add `requirements.txt`, `README.md`, `.gitignore`
+
+**Why:** a reviewer cloning your repo can't run it without knowing the deps. A README with example curl commands proves you know how to hand your code to someone else. `.gitignore` stops you from committing `__pycache__/`, save files, or `.env` secrets.
+
+```
+I have a Flask take-home project at /Users/user/Desktop/SiliconValley_Trail. The entry point is app.py; game logic is in game/, routes are in routes/, and there's an api/weather.py that calls open-meteo.com. Dependencies I import from: flask, flask_cors, dotenv, requests.
+
+Please create three files:
+
+1. requirements.txt — pin the four deps above to recent stable versions (whatever's current as of late 2025).
+
+2. README.md — include: (a) project description in 2 sentences, (b) install/run instructions (`pip install -r requirements.txt` then `python app.py`), (c) a list of API endpoints with one-line descriptions, (d) two example curl commands: POST /api/games to start a game, and POST /api/games/{id}/moves with action=travel. Don't pad it — keep it under 80 lines.
+
+3. .gitignore — ignore __pycache__/, *.pyc, .env, .venv/, venv/, games/, .DS_Store, .idea/.
+
+Show me each file in a separate code block.
+```
+
+---
+
+### How to use these prompts
+
+1. Pick the bug you want to fix.
+2. Copy the entire prompt block (everything between the triple backticks).
+3. Paste into a fresh chat with any capable AI coding assistant.
+4. Apply the suggested diff to your file.
+5. Run `python app.py` and test the specific behavior that was broken.
+6. Commit with a message like `fix: <bug name>` — your commit history becomes part of the story.
+
+**Do not** paste all prompts at once — AI quality drops when you ask for many unrelated fixes in one turn. One prompt, one fix, one commit.
